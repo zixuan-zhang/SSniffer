@@ -18,14 +18,18 @@ string SnifferThread::str_key = "name";
 SnifferThread::SnifferThread(QObject *parent) :
     QThread(parent)
 {
-    //str_key = "name";
     packetMap = new QMap<int,PacketInfo*>;
+    isOn = false;
 }
 
 void SnifferThread::run()
 {
-    packetNumber = 0;
-    sniffer_engine();
+    if(!isOn){
+        isOn = true;
+        packetNumber = 0;
+        qDebug()<<"sniffer start";
+        sniffer_engine();
+    }
 }
 
 void SnifferThread::changeFilterString(QString filterRule)
@@ -35,13 +39,15 @@ void SnifferThread::changeFilterString(QString filterRule)
     filter_temp  = ba.data();
     filter_str = new char[strlen(filter_temp) + 1];
     strcpy(filter_str, filter_temp);
-    qDebug()<<"filter length is "<<strlen(filter_str);
-    qDebug()<<"in sniffer filter string is "<<filter_str;
 }
 
 void SnifferThread::closeSniffer()
 {
-    pcap_close(handle);
+    if(isOn){
+        pcap_close(handle);
+        delete filter_str;
+        isOn = false;
+    }
 }
 
 void SnifferThread::analyze_packet(int selectNumber)
@@ -61,11 +67,14 @@ QStringList SnifferThread::analyze_tcp(const u_char *packet){
         dataList.append(data);
         return dataList;
     }
-    data += "SrcPort: " + QString(ntohs(hdr->src_port)) +
-            "DstPort: " + QString(ntohs(hdr->dst_port));
-    data += "SequenceNumber: " + QString(ntohs(hdr->tcp_seq));
-    data += "Acknowlegement: " + QString(ntohs(hdr->tcp_ack));
-    data += "CheckSum: " + QString(ntohs(hdr->th_sum));
+
+    data += "SrcPort: " + QString::number(ntohs(hdr->src_port)) +
+            "DstPort: " + QString::number(ntohs(hdr->dst_port)) + "\n";
+    data += "SequenceNumber: " + QString::number(ntohs(hdr->tcp_seq)) + "\n";
+    data += "Acknowlegement: " + QString::number(ntohs(hdr->tcp_ack)) + "\n";
+    data += "CheckSum: " + QString::number(ntohs(hdr->th_sum)) + "\n";
+
+    dataList.append(data);
 
     u_char *payload = (u_char*)(packet + 14 + 20 + size_tcp);
     ip_header *ip_hdr;
@@ -100,6 +109,17 @@ QStringList SnifferThread::analyze_udp(const u_char *packet)
         dataList.append(QString("Udp Length   = ") + QString::number(len) + "\n");
         dataList.append(QString("Check Sum     = ") + QString::number(hdr->checksum) + "\n");
 
+        u_char *payload = (u_char*)(packet + 14 + 20 + 8);// refers to ether, ip, udp header size
+        int size_payload = ntohs(hdr->len) - 8;
+
+        qDebug()<<"udp payload size is "<<size_payload;
+
+        QStringList remainData;
+        if(size_payload > 0){
+            dataList.append(QString("\nPayload Length: ") + QString::number(size_payload) + QString("Bytes: \n"));
+            remainData = analyze_payload(payload, size_payload);
+        }
+        dataList += remainData;
         return dataList;
 }
 
@@ -269,32 +289,25 @@ QString SnifferThread::print_hex_ascii_line(const u_char *payload, int len, int 
 
 void SnifferThread::sniffer_engine()
 {
-    qDebug()<<"in sniffer_engine";
     select_dev = pcap_lookupdev(errbuf);
-    qDebug()<<"select dev over";
     pcap_lookupnet(select_dev, &net_ip, &net_mask, errbuf);
-    qDebug()<<"pcap lookupnet over";
 
     handle = pcap_open_live(select_dev, BUFSIZ, 1, 0, errbuf);
-    qDebug()<<"pcap open live over";
-    qDebug()<<"filter string is "<<filter_str<<endl;
     pcap_compile(handle, &filter, filter_str, 0, net_ip);
-    qDebug()<<"compile over";
     pcap_setfilter(handle, &filter);
-    qDebug()<<"set filter over";
     pcap_dump_open(handle, DUMPFILE);
-    qDebug()<<"pcap dump open over";
     pcap_loop(handle, -1, ether_callback, (u_char*)this);
-    //pcap_close(handle);
 }
 
 void SnifferThread::ether_callback(u_char *arg, const struct pcap_pkthdr *pkthdr, const u_char *packet)
 {
+    qDebug()<<"Ether Callback";
     QString data;
     QString SrcMac, DstMac;
     SnifferThread *thisThread = (SnifferThread*)arg;
 
-    thisThread->mutex.lock();
+    //thisThread->mutex.lock();
+    qDebug()<<"ether in lock";
     data += QString::number(++packetNumber) + ",";
 
     struct ether_header *e_header;
@@ -305,7 +318,7 @@ void SnifferThread::ether_callback(u_char *arg, const struct pcap_pkthdr *pkthdr
     u_int8_t *p2 = e_header->ether_shost;
     for(int i=0;i<ETH_ALEN;i++,p1++,p2++)
     {
-    *p1=*p2;
+        *p1=*p2;
     }
     SrcMac = QString(ether_ntoa(&addr));
 
@@ -313,14 +326,14 @@ void SnifferThread::ether_callback(u_char *arg, const struct pcap_pkthdr *pkthdr
     p2=e_header->ether_dhost;
     for(int i=0;i<ETH_ALEN;i++,p1++,p2++)
     {
-    *p1=*p2;
+        *p1=*p2;
     }
     DstMac = QString(ether_ntoa(&addr));
 
     u_int16_t ether_type = ntohs(e_header->ether_type);
 
      QStringList remainList;
-    if(ether_type==0x0800||ether_type==0x0806||ether_type==0x86dd){
+    if(ether_type==0x0800||ether_type==0x0806){
         switch(ether_type){
             case 0x0800:
             remainList = ip_callback(arg, pkthdr, packet);
@@ -330,15 +343,18 @@ void SnifferThread::ether_callback(u_char *arg, const struct pcap_pkthdr *pkthdr
                 break;
         }
     }
+    else{
+        return;
+    }
 
     data += SrcMac + ",";
     data += DstMac + ",";
     data += remainList[0];
-    qDebug()<<"extract data is "<<data;
+    //qDebug()<<"extract data is "<<data;
     remainList[0] = data;
     thisThread->packetList[packetNumber] = remainList;
-    thisThread->mutex.unlock();
-    qDebug()<<packetNumber<<" list number is"<<remainList.count();
+    //thisThread->mutex.unlock();
+    //qDebug()<<packetNumber<<" list number is"<<remainList.count();
     emit thisThread->PackageExtracted(data);
 }
 
@@ -347,14 +363,14 @@ QStringList SnifferThread::ip_callback(u_char *arg, const struct pcap_pkthdr *pk
     /*
      * Return QStringList object including: src_ip, dst_ip, protocal, length
      */
-    SnifferThread *thisThread = (SnifferThread*)arg;
+    //SnifferThread *thisThread = (SnifferThread*)arg; TODO: useless or not?
 
     QStringList dataList;
     QString data;
 
     struct ip_header *hdr;
     hdr = (struct ip_header *)(packet + 14);
-    int size_ip = hdr->ip_hdr_len * 4;
+    //int size_ip = hdr->ip_hdr_len * 4; TODO: useless or not?
     data += QString(inet_ntoa(hdr->src_addr)) + ",";
     data += QString(inet_ntoa(hdr->dst_addr)) + ",";
 

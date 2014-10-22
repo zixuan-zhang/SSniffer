@@ -48,6 +48,7 @@ private:
      * pcap related operation
      */
 
+    bool isOn;
     static int packetNumber ;
     QMutex mutex;
 

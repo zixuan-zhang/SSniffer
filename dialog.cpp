@@ -15,7 +15,7 @@ Dialog::Dialog(QWidget *parent) :
     ui(new Ui::Dialog)
 {
     ui->setupUi(this);
-    /*Column Count: 7
+    /*Column Count: 7, Including:
      *  Number  SrcMac  DstMac  SrcIp   DstIp   Protocol    Length
      */
     ui->treeWidget->setColumnCount(7);
@@ -36,7 +36,7 @@ void Dialog::on_pushButton_clicked()
     filterRule = ui->lineEdit->text();
     ui->treeWidget->clear();
     ui->textBrowser->clear();
-    qDebug()<<"Filter Rule is "<<filterRule;
+    //qDebug()<<"Filter Rule is "<<filterRule;
     snifferThread->changeFilterString(filterRule);
     qDebug()<<"Starting snifferthread"<<endl;
     snifferThread->start();
@@ -57,7 +57,9 @@ void Dialog::AddRoot(QStringList data)
 
 void Dialog::on_pushButton_2_clicked()
 {
+    qDebug()<<"in pushbutton2 click";
    snifferThread->closeSniffer();
+    //snifferThread->exit();
 }
 
 void Dialog::on_pushButton_3_clicked()
